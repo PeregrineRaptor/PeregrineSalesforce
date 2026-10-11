@@ -1,0 +1,67 @@
+# Copy this file to config.toml and fill in the [telegram] section.
+# Every number below is a rule the bot follows. Change them here, not in code.
+
+[telegram]
+bot_token = ""   # from @BotFather (or set env TELEGRAM_BOT_TOKEN)
+chat_id = ""     # run: python main.py --find-chat-id   (or set env TELEGRAM_CHAT_ID)
+
+[account]
+starting_balance = 1000      # paper account, USD
+risk_per_trade_pct = 2.0     # max loss per trade if the stop hits (2% of $1000 = $20)
+default_leverage = 5
+max_leverage = 10
+max_open_positions = 3       # pending entries + open trades
+daily_loss_limit_pct = 6.0   # no new alerts for the rest of the UTC day after this
+min_order_usd = 10           # Hyperliquid minimum order value
+maker_fee_pct = 0.015        # limit entry
+taker_fee_pct = 0.045        # exits (assumed market, conservative)
+
+[scan]
+interval_seconds = 300       # full market scan
+price_check_seconds = 60     # stop / take-profit checks on open trades
+min_score = 70               # alert threshold (0-100)
+min_day_volume_usd = 5_000_000
+allow_shorts = true
+cooldown_hours = 6           # don't re-alert the same coin + side within this window
+
+[signals]
+breakout_lookback_hours = 24
+volume_period = 20
+volume_multiple = 2.0        # breakout candle volume vs. 20-candle average
+oi_lookback_hours = 4
+oi_rise_pct = 10.0
+long_funding_max = 0.0001    # 0.01%/h  - long OI signal needs funding at or below this
+short_funding_min = 0.0003   # 0.03%/h  - short OI signal needs crowded longs
+block_long_funding = 0.0005  # 0.05%/h  - never long above this
+block_short_funding = -0.0005
+max_24h_move_pct = 30.0      # never chase a coin already up (or down) this much
+btc_sma_period = 20          # BTC 4h trend filter
+
+[weights]
+breakout = 30
+open_interest = 25
+catalyst = 25
+btc_trend = 20
+
+[plan]
+atr_period = 14              # 1h ATR
+entry_pullback_atr = 0.5     # limit entry this many ATRs better than current price
+stop_atr = 1.5
+max_stop_pct = 10.0          # skip setups that need a wider stop than this
+tp1_r = 2.0                  # TP1 at 2x the stop distance
+tp1_close_pct = 50           # % of the position sold at TP1 (stop then moves to entry)
+tp2_r = 4.0
+tp2_close_pct = 30
+trail_atr = 1.0              # remainder trails this many ATRs behind the best price
+entry_expiry_hours = 4       # cancel the limit if not filled
+time_stop_hours = 24         # close if TP1 not hit by then
+max_hold_hours = 72
+
+[news]
+catalyst_window_hours = 2
+refresh_seconds = 600
+binance_listings = true
+upbit_listings = true
+cryptopanic_token = ""       # optional free key: cryptopanic.com/developers/api (or env CRYPTOPANIC_TOKEN)
+cryptopanic_url = "https://cryptopanic.com/api/developer/v2/posts/"
+cryptopanic_min_net_votes = 3
