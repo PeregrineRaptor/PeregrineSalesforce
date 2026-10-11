@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 from hyperliquid import Market
-from indicators import atr, breakout, sma
+from indicators import atr, breakout, correlation, fib_swing, sma
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +18,36 @@ class Signal:
     atr: float
     level: float = None   # broken range high/low, if this is a breakout
     catalysts: list = field(default_factory=list)
+    fib: object = None    # indicators.Fib from the 15m chart, if there is a clean swing
+    btc_corr: float = None
+
+
+@dataclass
+class BtcContext:
+    price: float
+    trend_up: bool        # 4h close above its moving average
+    change_1h_pct: float
+    change_4h_pct: float
+
+    def summary(self):
+        return (f"BTC {self.price:,.0f} · 4h trend {'up' if self.trend_up else 'down'} · "
+                f"{self.change_1h_pct:+.1f}% 1h · {self.change_4h_pct:+.1f}% 4h")
+
+
+def btc_gate(side, btc, cfg):
+    """Reason BTC rules out this side right now, or None if BTC allows it."""
+    b = cfg["btc"]
+    if btc is None:
+        return "BTC data unavailable" if b["require_trend"] else None
+    long = side == "long"
+    if b["require_trend"] and btc.trend_up != long:
+        return f"BTC 4h trend is {'down' if long else 'up'}"
+    s = 1 if long else -1
+    if s * btc.change_1h_pct <= -b["max_against_1h_pct"]:
+        return f"BTC {btc.change_1h_pct:+.1f}% in the last hour"
+    if s * btc.change_4h_pct <= -b["max_against_4h_pct"]:
+        return f"BTC {btc.change_4h_pct:+.1f}% in the last 4 hours"
+    return None
 
 
 def base_ticker(coin):
@@ -76,6 +106,8 @@ class Scanner:
         self.news = news
         self.oi_history = state.setdefault("oi_history", {})
         self._hourly_cache = {}
+        self._m15_cache = {}
+        self.btc = None
 
     def _record_oi(self, markets, now):
         keep = (self.cfg["signals"]["oi_lookback_hours"] + 2) * 3600
@@ -99,19 +131,57 @@ class Scanner:
         if cached and cached[0] == hour:
             return cached[1]
         sig, plan = self.cfg["signals"], self.cfg["plan"]
-        count = max(sig["breakout_lookback_hours"], sig["volume_period"], plan["atr_period"]) + 2
+        count = max(sig["breakout_lookback_hours"], sig["volume_period"], plan["atr_period"],
+                    self.cfg["btc"]["correlation_hours"]) + 2
         candles = self.hl.closed_candles(coin, "1h", count, now)
         self._hourly_cache[coin] = (hour, candles)
         return candles
 
-    def _btc_up(self, now):
+    def _quarter_hourly(self, coin, now):
+        """15m candles, refetched at most once per 15 minutes."""
+        slot = int(now // 900)
+        cached = self._m15_cache.get(coin)
+        if cached and cached[0] == slot:
+            return cached[1]
+        candles = self.hl.closed_candles(coin, "15m", self.cfg["fib"]["window_candles"], now)
+        self._m15_cache[coin] = (slot, candles)
+        return candles
+
+    def btc_context(self, markets, now):
         try:
-            period = self.cfg["signals"]["btc_sma_period"]
+            btc = next(m for m in markets if m.coin == "BTC")
+            period = self.cfg["btc"]["sma_period"]
             closes = [c.c for c in self.hl.closed_candles("BTC", "4h", period + 1, now)]
             avg = sma(closes, period)
-            return None if avg is None else closes[-1] > avg
+            m15 = self.hl.closed_candles("BTC", "15m", 16, now)
+            if avg is None or len(m15) < 16:
+                return None
+            return BtcContext(
+                price=btc.mark,
+                trend_up=closes[-1] > avg,
+                change_1h_pct=(btc.mark / m15[-4].o - 1) * 100,
+                change_4h_pct=(btc.mark / m15[-16].o - 1) * 100,
+            )
         except Exception as e:
-            log.warning("BTC trend unavailable: %s", e)
+            log.warning("BTC context unavailable: %s", e)
+            return None
+
+    def _fib(self, coin, side, now):
+        f = self.cfg["fib"]
+        if not f["enabled"]:
+            return None
+        try:
+            return fib_swing(self._quarter_hourly(coin, now), side, f["min_move_pct"], f["recent_candles"])
+        except Exception as e:
+            log.warning("15m candles for %s unavailable: %s", coin, e)
+            return None
+
+    def _btc_corr(self, coin_candles, now):
+        if not coin_candles:
+            return None
+        try:
+            return correlation(coin_candles, self._hourly("BTC", now), self.cfg["btc"]["correlation_hours"])
+        except Exception:
             return None
 
     def run(self, now=None):
@@ -121,9 +191,17 @@ class Scanner:
         markets = self.hl.markets()
         liquid = [m for m in markets if m.day_volume >= scan["min_day_volume_usd"]]
         self._record_oi(liquid, now)
-        btc_up = self._btc_up(now)
+        self.btc = btc = self.btc_context(markets, now)
         catalysts = self.news.catalysts(now)
-        sides = ["long", "short"] if scan["allow_shorts"] else ["long"]
+        sides = []
+        for side in (["long", "short"] if scan["allow_shorts"] else ["long"]):
+            blocked = btc_gate(side, btc, self.cfg)
+            if blocked:
+                log.info("no %ss: %s", side, blocked)
+            else:
+                sides.append(side)
+        if not sides:
+            return [], markets
 
         signals = []
         for m in liquid:
@@ -139,11 +217,17 @@ class Scanner:
             oi = self.oi_change_pct(m.coin, now)
             cats = catalysts.get(m.coin.upper(), []) + catalysts.get(base_ticker(m.coin), [])
             for side in sides:
+                btc_up = btc.trend_up if btc else None
                 score, reasons, blocked = score_side(side, m, brk, oi, cats, btc_up, self.cfg)
                 if blocked or score < scan["min_score"]:
                     continue
                 level = brk.level if brk and brk.side == side else None
-                signals.append(Signal(m, side, score, reasons, a, level, cats))
+                corr = self._btc_corr(candles, now) if m.coin != "BTC" else None
+                if corr is not None:
+                    reasons = reasons + [f"Tracks BTC with correlation {corr:.2f} over "
+                                         f"{self.cfg['btc']['correlation_hours']}h"]
+                signals.append(Signal(m, side, score, reasons, a, level, cats,
+                                      fib=self._fib(m.coin, side, now), btc_corr=corr))
         signals.sort(key=lambda s: -s.score)
         log.info("scanned %d liquid markets, %d signals", len(liquid), len(signals))
         return signals, markets

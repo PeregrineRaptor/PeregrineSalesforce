@@ -35,7 +35,15 @@ short_funding_min = 0.0003   # 0.03%/h  - short OI signal needs crowded longs
 block_long_funding = 0.0005  # 0.05%/h  - never long above this
 block_short_funding = -0.0005
 max_24h_move_pct = 30.0      # never chase a coin already up (or down) this much
-btc_sma_period = 20          # BTC 4h trend filter
+
+[btc]
+# BTC drives the market: these are hard gates, not just score points.
+require_trend = true         # longs only when BTC 4h closes above its 20-period average, shorts only below
+sma_period = 20
+max_against_1h_pct = 1.5     # no longs while BTC is down this much in the last hour (no shorts if up)
+max_against_4h_pct = 3.0     # same over the last 4 hours
+warn_open_trades_1h_pct = 1.5  # message you if BTC moves this much against a trade you took
+correlation_hours = 48       # shown on alerts: how closely the coin has tracked BTC
 
 [weights]
 breakout = 30
@@ -43,17 +51,32 @@ open_interest = 25
 catalyst = 25
 btc_trend = 20
 
+[fib]
+# Entries, stops and targets come from the latest 15m swing when there is a clean one.
+enabled = true
+window_candles = 96          # 15m candles searched for the swing (24h)
+recent_candles = 24          # the swing high (low for shorts) must be within the last 6h
+min_move_pct = 3.0           # ignore swings smaller than this
+entry_level = 0.618          # buy the pullback to this retracement
+stop_level = 0.786           # stop just beyond this retracement
+stop_buffer_pct = 0.2        # extra room beyond the stop level
+tp1_level = 0.0              # 0 = retest of the swing high (low for shorts)
+tp2_level = -0.272           # 1.272 extension
+min_stop_pct = 1.0           # widen stops tighter than this (15m noise)
+min_reward_risk = 1.5        # skip if TP1 is less than 1.5x the risk away
+fallback_to_atr = true       # no clean swing -> use the ATR plan below instead of skipping
+
 [plan]
-atr_period = 14              # 1h ATR
-entry_pullback_atr = 0.5     # limit entry this many ATRs better than current price
+atr_period = 14              # 1h ATR, used for the fallback plan and the trailing stop
+entry_pullback_atr = 0.5     # fallback plan: limit entry this many ATRs better than current price
 stop_atr = 1.5
 max_stop_pct = 10.0          # skip setups that need a wider stop than this
-tp1_r = 2.0                  # TP1 at 2x the stop distance
-tp1_close_pct = 50           # % of the position sold at TP1 (stop then moves to entry)
+tp1_r = 2.0                  # fallback plan: TP1 at 2x the stop distance
 tp2_r = 4.0
+tp1_close_pct = 50           # % of the position sold at TP1 (stop then moves to entry)
 tp2_close_pct = 30
 trail_atr = 1.0              # remainder trails this many ATRs behind the best price
-entry_expiry_hours = 4       # cancel the limit if not filled
+entry_expiry_hours = 6       # cancel the limit if not filled (fib pullbacks can take a few hours)
 time_stop_hours = 24         # close if TP1 not hit by then
 max_hold_hours = 72
 

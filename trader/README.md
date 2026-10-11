@@ -60,6 +60,20 @@ open interest now with 4 hours ago.
 | `/scan` | Scan right now |
 | `/pause` / `/resume` | Stop or restart new alerts; open trades are still tracked |
 
+## BTC comes first
+
+BTC drives the market, so these rules are hard gates, not just score points:
+
+- **Trend:** no longs unless BTC's 4h close is above its 20-period average. No shorts unless it's below.
+- **Dumps:** no longs while BTC is down 1.5%+ in the last hour or 3%+ over 4 hours, even in an uptrend.
+  Shorts follow the same rule when BTC is pumping.
+- **No data:** if BTC data can't be fetched, there are no alerts at all.
+- **Correlation:** every alert shows how closely the coin has tracked BTC over the last 48h.
+- **Open trades:** if BTC moves 1.5%+ against a trade you took, you get a ⚠️ warning to tighten your
+  stop, at most once an hour per trade.
+
+`/status` shows the current BTC picture.
+
 ## How a setup is scored
 
 | Signal | Points |
@@ -67,7 +81,7 @@ open interest now with 4 hours ago.
 | 1h candle closes above the 24h high (or below the low for shorts) on 2× or more average volume | 30 |
 | Open interest up 10%+ in 4h while funding is at or below 0.01%/h (squeeze fuel). For shorts: funding at or above 0.03%/h | 25 |
 | Catalyst in the last 2h: a Binance or Upbit listing (delisting for shorts), or a strongly voted CryptoPanic headline | 25 |
-| BTC 4h trend in the same direction | 20 |
+| BTC 4h trend in the same direction (required, see above) | 20 |
 
 **Never alerts when:**
 - Funding is above 0.05%/h for longs, or below −0.05%/h for shorts.
@@ -75,17 +89,35 @@ open interest now with 4 hours ago.
 - 24h volume is under $5M.
 - The stop would need to be wider than 10%.
 
-## How a trade is planned
+## How a trade is planned: Fibonacci on the 15m chart
+
+For each setup that scores 70+, the bot pulls the last 24h of 15m candles and finds the latest impulse leg.
+For a long, that's the highest high from the last 6h and the lowest low before it. The leg must be
+at least 3%.
 
 | Item | Rule |
 |---|---|
-| Entry | Limit order 0.5 ATR better than the current price, or at the retest of the breakout level. Cancelled after 4h if not filled. |
-| Stop | 1.5 ATR beyond the entry |
+| Entry | Limit at the **0.618** retracement. If price is already below it but above the stop, enter at the current price. |
+| Stop | Just beyond the **0.786** retracement (0.2% buffer), and never tighter than 1% |
+| TP1 | Retest of the **swing high** (swing low for shorts): sell 50%, move the stop to entry |
+| TP2 | **1.272 extension**: sell 30% |
+| Remainder | Trails 1 ATR (1h) behind the best price |
+| Skipped when | Price has already broken the 0.786 level (the swing failed), or TP1 is less than 1.5× the risk away |
+
+If there's no clean 15m swing, it falls back to a volatility (ATR) plan, and the alert says so:
+- **Entry:** 0.5 ATR pullback, or the retest of the breakout level.
+- **Stop:** 1.5 ATR.
+- **Targets:** TP1 at 2× the risk, TP2 at 4×.
+
+Set `fallback_to_atr = false` to only ever trade fib setups.
+
+Common to both plans:
+
+| Item | Rule |
+|---|---|
+| Unfilled entry | Cancelled after 6h |
 | Size | The stop loses exactly 2% of the account ($20 on $1,000) |
 | Leverage | 5× by default, never more than 10×, and always low enough that liquidation is well beyond the stop |
-| TP1 | 2× the stop distance: sell 50% and move the stop to entry |
-| TP2 | 4× the stop distance: sell 30% |
-| Remainder | Trails 1 ATR behind the best price |
 | Time limits | Closed at 24h if TP1 isn't hit; 72h maximum hold |
 | Account limits | Max 3 trades at once. After a 6% loss in a day, no new alerts until 00:00 UTC |
 

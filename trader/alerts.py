@@ -32,6 +32,7 @@ def trade_alert(pos, balance, cfg):
         "<b>Why</b>",
         *[f"• {escape(r)}" for r in pos["reasons"]],
         "",
+        f"<b>Levels</b> {escape(pos.get('method', ''))}",
         f"<b>Entry</b>  limit {price(pos['entry'])}",
         f"<b>Stop</b>   {price(pos['stop'])} ({stop_pct:+.1f}%)",
         f"<b>TP1</b>    {price(pos['tp1'])} ({tp1_pct:+.1f}%, {abs(tp1_pct) * lev:.0f}% on margin)"
@@ -43,6 +44,7 @@ def trade_alert(pos, balance, cfg):
         "",
         f"Cancel the entry if not filled in {p['entry_expiry_hours']}h. "
         f"Close at {p['time_stop_hours']}h if TP1 isn't hit.",
+        *([f"<i>{escape(pos['btc_note'])}</i>"] if pos.get("btc_note") else []),
         f"<i>Trade #{pos['id']} · paper balance {usd(balance)}</i>",
     ]
     return "\n".join(lines)
@@ -78,9 +80,18 @@ def event_message(kind, pos, info, balance):
     return None
 
 
-def status_message(paper, prices, now, paused):
+def btc_warning(pos, btc):
+    name = f"{escape(pos['coin'])} {pos['side']} (#{pos['id']})"
+    return (f"⚠️ <b>BTC {btc.change_1h_pct:+.1f}% in the last hour</b>, against your {name}.\n"
+            f"Consider tightening your stop{' to entry' if pos['tp1_hit'] else ''} or taking profit early. "
+            f"Current stop {price(pos['stop'])}.")
+
+
+def status_message(paper, prices, now, paused, btc=None):
     lines = [f"<b>Paper balance</b> {usd(paper.balance)} "
              f"(today {usd(paper.day_pnl(now), sign=True)})"]
+    if btc:
+        lines.append(escape(btc.summary()))
     if paused:
         lines.append("⏸ New alerts are paused. /resume to restart.")
     if paper.halted(now):

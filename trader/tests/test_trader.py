@@ -8,12 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import alerts  # noqa: E402
 from config import load_config  # noqa: E402
 from hyperliquid import Candle, Market  # noqa: E402
-from indicators import atr, breakout  # noqa: E402
+from indicators import Fib, atr, breakout, correlation, fib_swing  # noqa: E402
 from main import Bot  # noqa: E402
 from news import Catalyst, parse_binance, parse_upbit  # noqa: E402
 from paper import Paper  # noqa: E402
 from planner import make_plan  # noqa: E402
-from scanner import Signal, score_side  # noqa: E402
+from scanner import BtcContext, Signal, btc_gate, score_side  # noqa: E402
 from state import State  # noqa: E402
 
 CFG = load_config("/nonexistent")
@@ -146,7 +146,7 @@ class PaperTests(unittest.TestCase):
         self.assertGreater(self.paper.balance, 1000)
 
     def test_unfilled_entry_expires(self):
-        events = [e[0] for e in self.paper.update({"ENA": 0.63}, NOW + 5 * HOUR)]
+        events = [e[0] for e in self.paper.update({"ENA": 0.63}, NOW + 7 * HOUR)]
         self.assertEqual(events, ["expired"])
         self.assertEqual(self.paper.d["stats"]["trades"], 0)
 
@@ -177,19 +177,91 @@ class NewsTests(unittest.TestCase):
         self.assertEqual([(c.coin, c.side) for c in cats], [("ENA", "long")])
 
 
+def swing_up(n=96):
+    """15m chart: flat at 0.55, rally to 0.64, pull back to 0.62."""
+    closes = [0.55] * (n - 36) + [0.55 + 0.0045 * i for i in range(1, 21)] + [0.64 - 0.00125 * i for i in range(1, 17)]
+    return candles(closes)
+
+
+class FibTests(unittest.TestCase):
+    def test_finds_recent_up_swing(self):
+        fib = fib_swing(swing_up(), "long")
+        self.assertAlmostEqual(fib.start, 0.55 * 0.99)
+        self.assertAlmostEqual(fib.end, 0.64 * 1.01)
+        self.assertAlmostEqual(fib.level(0.5), (fib.start + fib.end) / 2)
+        self.assertGreater(fib.level(-0.272), fib.end)
+
+    def test_ignores_old_or_small_swings(self):
+        self.assertIsNone(fib_swing(candles([0.55] * 60 + [0.64] + [0.60] * 35), "long"))  # high 35 candles ago
+        self.assertIsNone(fib_swing(candles([1.0] * 90 + [1.01] * 6, spread=0.001), "long"))  # 3% min move
+
+    def test_short_swing_levels_mirror(self):
+        fib = Fib("short", start=110, end=100)
+        self.assertAlmostEqual(fib.level(0.618), 106.18)
+        self.assertAlmostEqual(fib.level(-0.272), 97.28)
+
+    def test_fib_plan(self):
+        fib = fib_swing(swing_up(), "long")
+        plan = make_plan(Signal(market(mark=0.62), "long", 80, [], atr=0.016, fib=fib), 1000, 1000, CFG)
+        self.assertAlmostEqual(plan.entry, fib.level(0.618), places=4)
+        self.assertAlmostEqual(plan.stop, fib.level(0.786) * 0.998, places=4)
+        self.assertAlmostEqual(plan.tp1, fib.end, places=4)
+        self.assertAlmostEqual(plan.tp2, fib.level(-0.272), places=4)
+        self.assertAlmostEqual(plan.risk_usd, 20, delta=0.05)
+        self.assertIn("15m fib", plan.method)
+
+    def test_price_below_fib_stop_kills_setup(self):
+        fib = fib_swing(swing_up(), "long")
+        self.assertIsNone(make_plan(Signal(market(mark=0.55), "long", 80, [], atr=0.016, fib=fib), 1000, 1000, CFG))
+
+    def test_deep_pullback_enters_at_market(self):
+        fib = fib_swing(swing_up(), "long")
+        plan = make_plan(Signal(market(mark=0.575), "long", 80, [], atr=0.016, fib=fib), 1000, 1000, CFG)
+        self.assertAlmostEqual(plan.entry, 0.575)
+
+
+class BtcTests(unittest.TestCase):
+    def btc(self, up=True, h1=0.2, h4=0.5):
+        return BtcContext(60000, up, h1, h4)
+
+    def test_trend_gates_direction(self):
+        self.assertIsNone(btc_gate("long", self.btc(up=True), CFG))
+        self.assertIn("trend is down", btc_gate("long", self.btc(up=False), CFG))
+        self.assertIsNone(btc_gate("short", self.btc(up=False, h1=-0.2, h4=-0.5), CFG))
+        self.assertIn("trend is up", btc_gate("short", self.btc(up=True), CFG))
+
+    def test_dump_blocks_longs_even_in_uptrend(self):
+        self.assertIn("last hour", btc_gate("long", self.btc(h1=-1.8), CFG))
+        self.assertIn("4 hours", btc_gate("long", self.btc(h4=-3.5), CFG))
+
+    def test_no_btc_data_blocks_everything(self):
+        self.assertIn("unavailable", btc_gate("long", None, CFG))
+
+    def test_correlation(self):
+        a = candles([1 + 0.01 * (i % 3) for i in range(50)])
+        self.assertAlmostEqual(correlation(a, a), 1.0)
+
+
 class FakeHL:
-    def __init__(self):
+    def __init__(self, btc_closes=None):
         self.m = market()
+        self.btc_closes = btc_closes
 
     def markets(self):
-        return [self.m]
+        btc = self._btc(16)[-1].c
+        return [self.m, market("BTC", mark=btc, prev_day=btc, max_lev=40)]
 
     def mids(self):
-        return {self.m.coin: self.m.mark}
+        return {m.coin: m.mark for m in self.markets()}
+
+    def _btc(self, count):
+        return candles(self.btc_closes[-count:] if self.btc_closes else [100.0 + i * 0.01 for i in range(count)])
 
     def closed_candles(self, coin, interval, count, now=None):
         if coin == "BTC":
-            return candles([100.0 + i for i in range(count)])
+            return self._btc(count)
+        if interval == "15m":
+            return swing_up(count)
         return candles([0.6] * (count - 1) + [0.62], [100.0] * (count - 1) + [400.0])
 
 
@@ -221,6 +293,15 @@ class FakeTG:
 
 
 class BotTests(unittest.TestCase):
+    def test_btc_downtrend_means_no_long_alerts(self):
+        with tempfile.TemporaryDirectory() as d:
+            tg = FakeTG()
+            hl = FakeHL(btc_closes=[100.0 - i * 0.5 for i in range(30)])
+            CFG_no_shorts = {**CFG, "scan": {**CFG["scan"], "allow_shorts": False}}
+            bot = Bot(CFG_no_shorts, State(Path(d) / "s.json"), hl, FakeNews(), tg, Path(d) / "j.csv")
+            bot.scan(NOW)
+            self.assertEqual(tg.sent, [])
+
     def test_end_to_end_alert_and_followups(self):
         with tempfile.TemporaryDirectory() as d:
             state, tg = State(Path(d) / "state.json"), FakeTG()
@@ -230,6 +311,8 @@ class BotTests(unittest.TestCase):
             text, buttons = tg.sent[0]
             self.assertIn("LONG ENA", text)
             self.assertIn("score 75/100", text)  # breakout + catalyst + BTC trend
+            self.assertIn("15m fib", text)
+            self.assertIn("BTC 100 · 4h trend up", text)
             self.assertEqual(buttons[0][1], "took:1")
 
             bot.scan(NOW + 300)  # cooldown: no duplicate alert
@@ -248,6 +331,14 @@ class BotTests(unittest.TestCase):
             msgs = [t for t, _ in tg.sent]
             self.assertTrue(any("Your limit should be filled" in m for m in msgs))
             self.assertTrue(any("TP1 hit" in m for m in msgs))
+
+            # BTC dumps 2% in the last hour while the trade is open: one warning, not repeated.
+            bot.hl.btc_closes = [100.0] * 30 + [101.0] * 3 + [98.9]
+            bot.scanner.hl = bot.hl
+            bot.scan(NOW + 600)
+            bot.scan(NOW + 900)
+            warnings = [t for t, _ in tg.sent if "BTC" in t and "against your" in t]
+            self.assertEqual(len(warnings), 1)
 
             tg.queue = [{"update_id": 3, "message": {"chat": {"id": 42}, "text": "/status"}}]
             bot.handle_updates()

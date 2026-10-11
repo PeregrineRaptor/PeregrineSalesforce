@@ -47,9 +47,23 @@ class Bot:
             if kind == "expired":
                 self.tg.clear_buttons(pos["message_id"])
 
+    def warn_on_btc(self, now):
+        """BTC moving hard against a trade you took: tell you, at most once an hour per trade."""
+        btc = self.scanner.btc
+        limit = self.cfg["btc"]["warn_open_trades_1h_pct"]
+        if not btc:
+            return
+        for pos in self.paper.active():
+            s = 1 if pos["side"] == "long" else -1
+            if (pos["taken"] and pos["status"] == "open" and pos["coin"] != "BTC"
+                    and s * btc.change_1h_pct <= -limit and now - pos.get("btc_warned_at", 0) >= 3600):
+                pos["btc_warned_at"] = now
+                self.tg.send(alerts.btc_warning(pos, btc))
+
     def scan(self, now):
         signals, markets = self.scanner.run(now)
         self.check_prices(now, {m.coin: m.mark for m in markets})
+        self.warn_on_btc(now)
 
         if self.data["paused"]:
             return
@@ -77,6 +91,8 @@ class Bot:
             if not plan:
                 continue
             pos = self.paper.add(plan, now)
+            if self.scanner.btc:
+                pos["btc_note"] = self.scanner.btc.summary()
             cds[key] = now
             active_coins.add(plan.coin)
             pos["message_id"] = self.tg.send(alerts.trade_alert(pos, self.paper.balance, self.cfg),
@@ -121,7 +137,8 @@ class Bot:
         cmd = cmd[0].split("@")[0].lower() if cmd else ""
         now = time.time()
         if cmd == "/status":
-            self.tg.send(alerts.status_message(self.paper, self.prices, now, self.data["paused"]))
+            self.tg.send(alerts.status_message(self.paper, self.prices, now, self.data["paused"],
+                                                self.scanner.btc))
         elif cmd == "/stats":
             self.tg.send(alerts.stats_message(self.paper, self.cfg["account"]["starting_balance"]))
         elif cmd == "/pause":
