@@ -17,15 +17,18 @@ maker_fee_pct = 0.015        # limit entry
 taker_fee_pct = 0.045        # exits (assumed market, conservative)
 
 [scan]
-interval_seconds = 300       # full market scan
-price_check_seconds = 60     # stop / take-profit checks on open trades
-min_score = 70               # alert threshold (0-100)
+interval_seconds = 60        # full market scan
+price_check_seconds = 15     # stop / take-profit checks on open trades
+min_score = 70               # alert threshold
 min_day_volume_usd = 5_000_000
+max_coins = 50               # most-traded coins scanned
+max_candle_fetches_per_scan = 25  # stays inside Hyperliquid's rate limit
 allow_shorts = true
 cooldown_hours = 6           # don't re-alert the same coin + side within this window
 
 [signals]
-breakout_lookback_hours = 24
+# Breakouts are detected on 15m candles, so a move is caught within minutes of the candle closing.
+breakout_lookback_candles = 96   # 15m candles = 24h range
 volume_period = 20
 volume_multiple = 2.0        # breakout candle volume vs. 20-candle average
 oi_lookback_hours = 4
@@ -50,6 +53,21 @@ breakout = 30
 open_interest = 25
 catalyst = 25
 btc_trend = 20
+smart_money = 25             # 2+ tracked top traders positioned the same way
+
+[smart_money]
+# Follow the most profitable Hyperliquid accounts (public on-chain) - the same idea as copy trading.
+enabled = true
+top_n = 30                   # accounts followed, ranked by 30-day P&L
+min_account_value = 100_000
+min_month_pnl = 50_000
+min_month_roi_pct = 15
+max_month_volume_to_account = 300  # skips market makers / HFT bots
+refresh_hours = 6            # re-pick the list
+poll_seconds = 60
+min_position_usd = 50_000    # ignore small positions
+consensus_traders = 2        # this many on the same side adds the smart_money score
+alert_on_open = true         # message you the moment a followed trader opens or flips a position
 
 [fib]
 # Entries, stops and targets come from the latest 15m swing when there is a clean one.
@@ -79,6 +97,21 @@ trail_atr = 1.0              # remainder trails this many ATRs behind the best p
 entry_expiry_hours = 6       # cancel the limit if not filled (fib pullbacks can take a few hours)
 time_stop_hours = 24         # close if TP1 not hit by then
 max_hold_hours = 72
+
+[analyst]
+# Claude reads each alert, searches the latest news on the coin and writes a short take with the risks.
+# Needs an Anthropic API key (console.anthropic.com) - roughly a few cents per alert.
+enabled = true
+api_key = ""                 # or env ANTHROPIC_API_KEY
+model = "claude-opus-5-5"
+effort = "medium"
+max_searches = 3
+
+[backtest]
+days = 50                    # Hyperliquid serves ~5000 candles per coin: 50 days of 15m
+coins = 25                   # most-traded coins tested
+min_score = 50               # history has no news/OI/top-trader data, so only price signals (breakout 30 + BTC 20) count
+cache_dir = "backtest_cache"
 
 [news]
 catalyst_window_hours = 2

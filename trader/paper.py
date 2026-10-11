@@ -16,8 +16,9 @@ def utc(ts):
 
 
 class Paper:
-    def __init__(self, state, cfg, journal_path):
+    def __init__(self, state, cfg, journal_path, keep_closed=False):
         self.cfg = cfg
+        self.closed = [] if keep_closed else None   # the backtester keeps every closed trade for its report
         self.journal_path = Path(journal_path)
         start = cfg["account"]["starting_balance"]
         self.d = state.setdefault("paper", {
@@ -82,6 +83,8 @@ class Paper:
             st["pnl"] += pos["realized"]
         self._journal(pos)
         self.d["positions"].remove(pos)
+        if self.closed is not None and count_trade:
+            self.closed.append(pos)
 
     def update(self, prices, now=None):
         """Advance every pending/open position to the latest prices. Returns [(event, pos, info)]."""

@@ -8,6 +8,7 @@ ENV_OVERRIDES = {
     "TELEGRAM_BOT_TOKEN": ("telegram", "bot_token"),
     "TELEGRAM_CHAT_ID": ("telegram", "chat_id"),
     "CRYPTOPANIC_TOKEN": ("news", "cryptopanic_token"),
+    "ANTHROPIC_API_KEY": ("analyst", "api_key"),
 }
 
 

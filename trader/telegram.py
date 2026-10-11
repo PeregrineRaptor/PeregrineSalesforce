@@ -28,12 +28,14 @@ class Telegram:
             raise TelegramError(f"{method}: {data.get('description')}")
         return data["result"]
 
-    def send(self, text, buttons=None):
+    def send(self, text, buttons=None, reply_to=None):
         """Send an HTML message; `buttons` is [(label, callback_data), ...]. Returns the message id."""
         if not self.enabled:
             print("\n" + text + ("\n[" + " | ".join(b[0] for b in buttons) + "]" if buttons else "") + "\n")
             return None
         params = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        if reply_to:
+            params["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
         if buttons:
             params["reply_markup"] = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]}
         return self.call("sendMessage", **params)["message_id"]

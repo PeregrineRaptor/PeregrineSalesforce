@@ -1,87 +1,84 @@
 # Trade alert bot
 
-Scans every liquid perp on Hyperliquid, the exchange behind Phantom's perps, every 5 minutes. When a setup
-scores 70 or more out of 100, it sends you a Telegram message with an exact plan: limit entry, stop loss,
-two take-profits, position size and leverage. You place the trade yourself in Phantom.
+A 24/7 bot for Hyperliquid perps, the exchange behind Phantom perps and copy-trading apps. It sends trade plans to your Telegram:
 
-Every alert is also **paper-traded** on a $1,000 account. Tap **✅ Took it** and the bot messages you
-when the entry fills, when to take profit and move your stop, and when to get out.
-`journal.csv` records every trade, wins and losses, so after about 50 trades you can see if the rules really work.
+- **Scans every minute.** Covers the 50 most-traded perps on 15m candles, so breakouts are caught within
+  minutes of the candle closing.
+- **Follows the top traders.** Tracks the 30 most profitable Hyperliquid accounts and alerts you within
+  about a minute when one opens, adds to or flips a position. You get your own entry, stop and targets for
+  the trade, plus a heads-up when that trader closes.
+- **Checks the news with AI.** Claude searches the latest news on each coin and replies under the alert with
+  TAKE / CAUTION / AVOID and the main risk.
+- **Backtests the rules on demand.** `/backtest` replays the exact rules over the last 50 days, so you see
+  win rate, return and drawdown in minutes instead of waiting weeks.
+- **Respects BTC.** No longs while BTC's 4h trend is down or BTC is dumping, and you get warnings on open
+  trades when BTC turns.
+- **Plans every trade the same way.** Fibonacci entries and stops on 15m swings, a fixed $20 risk per trade
+  on $1,000, two take-profits and a trailing stop.
+- **Tracks trades you take.** Tap ✅ Took it and the bot tells you when the entry fills, when to take
+  profit, when to move your stop, and when to get out.
 
-The bot never touches your wallet. It only reads public market data.
+The bot never touches your wallet. It only reads public market data. Every alert is also paper-traded,
+so `/stats` and `journal.csv` show how the live alerts are really doing.
 
-## Setup (about 10 minutes)
+## Install on your VM (Ubuntu/Debian, about 5 minutes)
 
-1. **Install Python 3.11 or newer** from python.org. On Windows, tick "Add Python to PATH".
-2. **Install the one dependency.** In a terminal, inside this `trader` folder:
+1. **Create the Telegram bot.** Message **@BotFather** in Telegram, send `/newbot`, and copy the token.
+2. **Optional: get an Anthropic API key** at console.anthropic.com for the AI analyst. It costs roughly a
+   few cents per alert.
+3. **On the VM**, copy this `trader` folder over (or `git clone` the repo), then run:
    ```
-   pip install -r requirements.txt
+   bash trader/deploy/install.sh
    ```
-3. **Create your Telegram bot**
-   - In Telegram, message **@BotFather**, send `/newbot`, and pick a name.
-   - It replies with a token like `123456:ABC-...`.
-   - Copy `config.example.toml` to `config.toml` and paste the token into `bot_token`.
-4. **Get your chat id**
-   - Open your new bot in Telegram, press Start, and send it any message.
-   - Run:
-     ```
-     python main.py --find-chat-id
-     ```
-   - Paste the number it prints into `chat_id` in `config.toml`.
-5. **Run it:**
-   ```
-   python main.py
-   ```
-   You should get "🤖 Trade alert bot started" in Telegram.
+   It asks for the token, has you message the bot to find your chat id, optionally asks for the Anthropic
+   key, then starts the bot as a service. The service restarts if it crashes and starts on boot.
 
-`config.toml` holds your token and is never committed to git.
+You'll get "🤖 Trade alert bot started" in Telegram. Useful commands on the VM:
 
-## Keeping it running
+```
+journalctl -u trader -f             # live logs
+sudo systemctl restart trader       # after editing config.toml
+.venv/bin/python backtest.py        # full backtest in the terminal (from the trader folder)
+```
 
-The bot has to stay on to catch setups.
-- **Your computer:** leave the terminal open and stop the computer from sleeping.
-- **A $5/month server (recommended):** for example DigitalOcean or Hetzner, Ubuntu. Run:
-  ```
-  nohup python3 main.py > bot.log 2>&1 &
-  ```
-  or set it up as a systemd service.
-
-If the bot restarts it picks up where it left off, because everything is saved in `state.json`.
-
-The open-interest signal needs about 4 hours of the bot running before it can score, because it compares
-open interest now with 4 hours ago.
+The VM only needs outbound internet access, with no open ports. Any small VM is enough: 1 vCPU and
+1 GB RAM.
 
 ## Telegram commands
 
 | Command | What it does |
 |---|---|
-| `/status` | Paper balance, today's P&L, open trades |
-| `/stats` | Closed trades, win rate, total P&L |
+| `/backtest` | Test the current rules on the last 50 days. About 3–5 minutes the first time, seconds after that. |
+| `/traders` | The top traders being followed, and which coins several of them are positioned in |
+| `/status` | Paper balance, the BTC picture, open trades |
+| `/stats` | Win rate and P&L of the live alerts so far |
 | `/scan` | Scan right now |
 | `/pause` / `/resume` | Stop or restart new alerts; open trades are still tracked |
 
-## BTC comes first
+## The alerts you'll get
 
-BTC drives the market, so these rules are hard gates, not just score points:
-
-- **Trend:** no longs unless BTC's 4h close is above its 20-period average. No shorts unless it's below.
-- **Dumps:** no longs while BTC is down 1.5%+ in the last hour or 3%+ over 4 hours, even in an uptrend.
-  Shorts follow the same rule when BTC is pumping.
-- **No data:** if BTC data can't be fetched, there are no alerts at all.
-- **Correlation:** every alert shows how closely the coin has tracked BTC over the last 48h.
-- **Open trades:** if BTC moves 1.5%+ against a trade you took, you get a ⚠️ warning to tighten your
-  stop, at most once an hour per trade.
-
-`/status` shows the current BTC picture.
+| Alert | When |
+|---|---|
+| 🟢 / 🔴 **LONG / SHORT** | A coin scores 70 or more (see scoring below) |
+| 👀 **COPY** | A followed top trader opens, adds to or flips a $50k+ position, and BTC and the rules allow it. It comes with your own fib/ATR levels, not theirs. |
+| 👀 *Not copying: …* | A top trader moved, but BTC or the rules say no. You see it anyway, with the reason. |
+| 🧠 **Analyst** | Arrives as a reply under each trade alert about a minute later, with TAKE / CAUTION / AVOID |
+| ✅ 🎯 💰 🛑 ⌛ | Follow-ups on trades you tapped "Took it" on |
+| ⚠️ **BTC** | BTC moves 1.5%+ in an hour against a trade you took |
+| 👀 **closed** | The top trader you copied just closed their position |
 
 ## How a setup is scored
 
 | Signal | Points |
 |---|---|
-| 1h candle closes above the 24h high (or below the low for shorts) on 2× or more average volume | 30 |
+| A 15m candle closes above the 24h high (below the low for shorts) on 2× or more average volume | 30 |
 | Open interest up 10%+ in 4h while funding is at or below 0.01%/h (squeeze fuel). For shorts: funding at or above 0.03%/h | 25 |
-| Catalyst in the last 2h: a Binance or Upbit listing (delisting for shorts), or a strongly voted CryptoPanic headline | 25 |
-| BTC 4h trend in the same direction (required, see above) | 20 |
+| Catalyst in the last 2h: a Binance/Upbit listing (delisting for shorts), or a strongly voted CryptoPanic headline | 25 |
+| 2 or more followed top traders positioned the same way | 25 |
+| BTC 4h trend in the same direction | 20 |
+
+**BTC gate.** No longs unless BTC's 4h close is above its 20-period average, and no longs while BTC is
+down 1.5% in the last hour or 3% over 4 hours. Shorts follow the mirror rule. Without BTC data, no alerts.
 
 **Never alerts when:**
 - Funding is above 0.05%/h for longs, or below −0.05%/h for shorts.
@@ -89,44 +86,60 @@ BTC drives the market, so these rules are hard gates, not just score points:
 - 24h volume is under $5M.
 - The stop would need to be wider than 10%.
 
-## How a trade is planned: Fibonacci on the 15m chart
+## How a trade is planned
 
-For each setup that scores 70+, the bot pulls the last 24h of 15m candles and finds the latest impulse leg.
-For a long, that's the highest high from the last 6h and the lowest low before it. The leg must be
-at least 3%.
+**Fibonacci on the 15m chart** is used when there's a clean swing: the latest impulse leg of at least 3%,
+with its high in the last 6h.
 
 | Item | Rule |
 |---|---|
 | Entry | Limit at the **0.618** retracement. If price is already below it but above the stop, enter at the current price. |
-| Stop | Just beyond the **0.786** retracement (0.2% buffer), and never tighter than 1% |
-| TP1 | Retest of the **swing high** (swing low for shorts): sell 50%, move the stop to entry |
-| TP2 | **1.272 extension**: sell 30% |
+| Stop | Just beyond **0.786** (0.2% buffer), never tighter than 1% |
+| TP1 | Retest of the swing high: sell 50% and move the stop to entry |
+| TP2 | **1.272** extension: sell 30% |
 | Remainder | Trails 1 ATR (1h) behind the best price |
-| Skipped when | Price has already broken the 0.786 level (the swing failed), or TP1 is less than 1.5× the risk away |
+| Skipped when | The swing has already failed (price is below 0.786), or TP1 is less than 1.5× the risk away |
 
-If there's no clean 15m swing, it falls back to a volatility (ATR) plan, and the alert says so:
-- **Entry:** 0.5 ATR pullback, or the retest of the breakout level.
+**Fallback.** With no clean swing, the bot uses an ATR plan:
+- **Entry:** 0.5 ATR pullback.
 - **Stop:** 1.5 ATR.
-- **Targets:** TP1 at 2× the risk, TP2 at 4×.
+- **Targets:** TP1 at 2R, TP2 at 4R.
 
-Set `fallback_to_atr = false` to only ever trade fib setups.
+**Common to both:**
+- **Risk:** 2% of the account per trade ($20 on $1,000).
+- **Leverage:** 5× by default, 10× maximum, with liquidation always well beyond the stop.
+- **Entries:** unfilled entries are cancelled after 6h.
+- **Time limits:** a trade is closed at 24h if TP1 isn't hit, and held 72h at most.
+- **Account limits:** max 3 trades at once. After a 6% loss in a day, no new alerts until 00:00 UTC.
 
-Common to both plans:
+Every number is in `config.toml`. After changing one, run `/backtest` to see its effect.
 
-| Item | Rule |
-|---|---|
-| Unfilled entry | Cancelled after 6h |
-| Size | The stop loses exactly 2% of the account ($20 on $1,000) |
-| Leverage | 5× by default, never more than 10×, and always low enough that liquidation is well beyond the stop |
-| Time limits | Closed at 24h if TP1 isn't hit; 72h maximum hold |
-| Account limits | Max 3 trades at once. After a 6% loss in a day, no new alerts until 00:00 UTC |
+## Reading the backtest
 
-Every number above is in `config.toml` and can be changed there.
+`/backtest` runs the current rules plus three variants, so you can see which rules earn their keep:
+- **without the BTC gate**
+- **ATR levels only**
+- **fib setups only**
 
-## Optional: more news
+It reports trades, win rate, return, max drawdown, average win and loss, profit factor, best and worst coin,
+and how trades exited. Every trade of the current rules is saved to `backtest_trades.csv`.
 
-Get a free API key at cryptopanic.com/developers/api and put it in `cryptopanic_token`. That adds
-headline catalysts on top of the exchange listing watchers.
+**What the history covers.** Hyperliquid has no history for news, open interest or top-trader positions,
+so the backtest only uses price signals: breakout plus BTC trend, at a 50-point threshold. It also assumes
+green candles dip before rallying and red candles bounce before falling. Treat it as a test of the
+entries, exits and BTC filter, not of every live signal.
+
+**Rule of thumb:** a profit factor above 1.3 with a drawdown you can stomach is worth trading. Below 1.0,
+the rules lose money. Change the config and test again.
+
+## Running without the VM installer
+
+```
+pip install -r requirements.txt
+cp config.example.toml config.toml   # add bot_token, then:
+python main.py --find-chat-id        # after messaging your bot; paste chat_id into config.toml
+python main.py
+```
 
 ## Tests
 
@@ -134,11 +147,11 @@ headline catalysts on top of the exchange listing watchers.
 python -m unittest discover -s tests
 ```
 
-## Limits to know about
+## Limits
 
-- The paper account checks prices every 60 seconds and fills exits at the price it sees, so fast wicks
-  can differ from what you get in real trading.
-- The Binance and Upbit announcement feeds are unofficial. If one changes format the bot logs a warning
-  and keeps running without it.
-- Token unlocks aren't checked yet.
-- This is a rules engine, not a guarantee. Run it on paper before trading real money on its alerts.
+- The top-trader list comes from Hyperliquid's public leaderboard, filtered to consistently profitable
+  accounts that aren't market makers. Past P&L doesn't guarantee their next trade.
+- Paper fills use 15-second price checks, so fast wicks can differ from real fills.
+- The Binance/Upbit announcement feeds are unofficial. If one changes, the bot logs a warning and carries
+  on without it.
+- Token unlocks aren't checked.

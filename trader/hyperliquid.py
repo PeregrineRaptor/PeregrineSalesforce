@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import requests
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
+LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 INTERVAL_MS = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
 
 
@@ -21,6 +22,16 @@ class Market:
     @property
     def change_24h_pct(self):
         return (self.mark / self.prev_day - 1) * 100 if self.prev_day else 0.0
+
+
+@dataclass
+class Position:
+    coin: str
+    size: float         # signed: positive long, negative short
+    entry: float
+    value_usd: float
+    leverage: float
+    liquidation: float  # 0 if none
 
 
 @dataclass
@@ -73,3 +84,25 @@ class Hyperliquid:
         candles = [Candle(t=r["t"], close_time=r["T"], o=float(r["o"]), h=float(r["h"]),
                           l=float(r["l"]), c=float(r["c"]), v=float(r["v"])) for r in rows]
         return [c for c in candles if c.close_time < now_ms][-count:]
+
+    def positions(self, address):
+        """Open perp positions of any Hyperliquid account (all public on-chain)."""
+        state = self._post({"type": "clearinghouseState", "user": address})
+        out = []
+        for ap in state.get("assetPositions", []):
+            p = ap.get("position", {})
+            size = float(p.get("szi") or 0)
+            if not size:
+                continue
+            out.append(Position(
+                coin=p["coin"], size=size, entry=float(p.get("entryPx") or 0),
+                value_usd=abs(float(p.get("positionValue") or 0)),
+                leverage=float((p.get("leverage") or {}).get("value") or 0),
+                liquidation=float(p.get("liquidationPx") or 0),
+            ))
+        return out
+
+    def leaderboard(self):
+        r = self.session.get(LEADERBOARD_URL, timeout=60)
+        r.raise_for_status()
+        return r.json().get("leaderboardRows", [])

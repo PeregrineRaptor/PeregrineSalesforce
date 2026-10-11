@@ -94,3 +94,21 @@ def correlation(a, b, periods=48):
     va = sum((x - ma) ** 2 for x in ra)
     vb = sum((y - mb) ** 2 for y in rb)
     return cov / (va * vb) ** 0.5 if va > 0 and vb > 0 else None
+
+
+def aggregate(candles, factor):
+    """Merge consecutive candles into bigger ones (e.g. 4 x 15m -> 1h), aligned to the bigger interval."""
+    if not candles:
+        return []
+    span = (candles[0].close_time - candles[0].t + 1) * factor
+    groups = {}
+    for c in candles:
+        groups.setdefault(c.t // span, []).append(c)
+    out = []
+    for key in sorted(groups):
+        g = groups[key]
+        if len(g) < factor:
+            continue  # incomplete bucket at either end
+        out.append(type(g[0])(t=key * span, close_time=key * span + span - 1, o=g[0].o,
+                              h=max(c.h for c in g), l=min(c.l for c in g), c=g[-1].c, v=sum(c.v for c in g)))
+    return out

@@ -25,9 +25,11 @@ def trade_alert(pos, balance, cfg):
     long = pos["side"] == "long"
     lev = pos["leverage"]
     head = f"{'🟢 LONG' if long else '🔴 SHORT'} {escape(pos['coin'])}"
+    if pos.get("source"):
+        head = f"👀 COPY {head}"
     stop_pct, tp1_pct, tp2_pct = (pct(pos["entry"], pos[k]) for k in ("stop", "tp1", "tp2"))
     lines = [
-        f"<b>{head}</b> — score {pos['score']}/100",
+        f"<b>{head}</b> — score {min(pos['score'], 100)}/100",
         "",
         "<b>Why</b>",
         *[f"• {escape(r)}" for r in pos["reasons"]],
@@ -87,6 +89,52 @@ def btc_warning(pos, btc):
             f"Current stop {price(pos['stop'])}.")
 
 
+def trader_label(t):
+    return (f"Top trader #{t['rank']} ({escape(t['name'])}, 30d {usd(t['month_pnl'], sign=True)[:-3]}, "
+            f"{t['month_roi_pct']:+.0f}%)")
+
+
+def move_reason(move):
+    verb = {"open": "opened", "add": "added to", "flip": "flipped into"}[move.kind]
+    liq = f", liq {price(move.liquidation)}" if move.liquidation else ""
+    return (f"{trader_label(move.trader)} {verb} a {move.side.upper()} worth ${move.value_usd:,.0f} "
+            f"at {move.leverage:g}x, entry {price(move.entry)}{liq}")
+
+
+def move_info(move, why_not):
+    """A followed trader moved, but the bot won't copy it."""
+    return (f"👀 <b>{escape(move.coin)}</b>: {escape(move_reason(move))}\n"
+            f"<i>Not copying: {escape(why_not)}.</i>")
+
+
+def trader_closed(pos, move):
+    return (f"👀 <b>{escape(move.coin)}</b>: {escape(trader_label(move.trader))} just <b>closed</b> their "
+            f"{move.side}. You copied this (#{pos['id']}). <b>Consider exiting or tightening your stop</b> "
+            f"(currently {price(pos['stop'])}).")
+
+
+def analyst_message(pos, text):
+    verdict = text.split("\n", 1)[0].upper()
+    icon = "🟢" if "TAKE" in verdict else "🔴" if "AVOID" in verdict else "🟡"
+    return f"🧠 {icon} <b>Analyst on {escape(pos['coin'])} {pos['side']} (#{pos['id']})</b>\n{escape(text)}"
+
+
+def traders_message(smart):
+    if not smart.traders:
+        return "Not following anyone yet; the top-trader list loads within a minute of starting."
+    cons = smart.consensus()
+    lines = [f"<b>Following {len(smart.traders)} top Hyperliquid traders</b> (30-day P&amp;L)"]
+    for t in smart.traders[:15]:
+        lines.append(f"#{t['rank']} {escape(t['name'])}: {usd(t['month_pnl'], sign=True)[:-3]} "
+                     f"({t['month_roi_pct']:+.0f}%)")
+    crowded = sorted(((c, side, v) for c, sides in cons.items() for side, v in sides.items() if v["count"] >= 2),
+                     key=lambda x: -x[2]["usd"])[:8]
+    if crowded:
+        lines += ["", "<b>Where they agree</b>"]
+        lines += [f"{escape(c)} {side}: {v['count']} traders, ${v['usd'] / 1e6:.1f}M" for c, side, v in crowded]
+    return "\n".join(lines)
+
+
 def status_message(paper, prices, now, paused, btc=None):
     lines = [f"<b>Paper balance</b> {usd(paper.balance)} "
              f"(today {usd(paper.day_pnl(now), sign=True)})"]
@@ -123,10 +171,13 @@ def stats_message(paper, start):
 
 
 HELP = """<b>Commands</b>
-/status — paper balance and open trades
+/status — paper balance, BTC and open trades
 /stats — win rate and total P&amp;L
+/backtest — test the rules on the last 50 days (takes a few minutes)
+/traders — the top traders being followed and where they agree
 /scan — run a market scan now
 /pause — stop new alerts (open trades still tracked)
 /resume — restart alerts
 
-Tap <b>✅ Took it</b> on an alert and I'll message you when to take profit, move your stop, or get out."""
+Tap <b>✅ Took it</b> on an alert and I'll message you when to take profit, move your stop, or get out \
+— and if the top trader you copied closes, or BTC turns against you."""

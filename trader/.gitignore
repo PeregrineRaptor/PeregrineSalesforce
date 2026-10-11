@@ -2,5 +2,8 @@ config.toml
 state.json
 state.tmp
 journal.csv
+backtest_trades.csv
+backtest_cache/
+.venv/
 *.log
 __pycache__/
